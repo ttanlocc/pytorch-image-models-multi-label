@@ -74,6 +74,8 @@ def create_dataset(
         seed: int = 42,
         repeats: int = 0,
         input_img_mode: str = 'RGB',
+        csv_file: Optional[str] = None,
+        images_dir: Optional[str] = None,  # New argument for image directory
         **kwargs,
 ):
     """ Dataset factory method
@@ -208,17 +210,40 @@ def create_dataset(
             input_img_mode=input_img_mode,
             **kwargs
         )
-    else:
-        # FIXME support more advance split cfg for ImageFolder/Tar datasets in the future
+    elif name.startswith('image_folder') or name.startswith('folder'):
         if search_split and os.path.isdir(root):
             # look for split specific sub-folder in root
             root = _search_split(root, split)
-        ds = ImageDataset(
-            root,
-            reader=name,
-            class_map=class_map,
-            load_bytes=load_bytes,
-            input_img_mode=input_img_mode,
-            **kwargs,
-        )
+
+        if csv_file and images_dir:
+            # Load labels from CSV file
+            labels_df = pd.read_csv(csv_file)
+            labels_dict = {row['img_name']: row.drop('img_name').to_list() for _, row in labels_df.iterrows()}
+
+            # Create a custom dataset to handle image and labels
+            class MultiLabelImageDataset(Dataset):
+                def __init__(self, images_dir, labels_dict, transform=None):
+                    self.images_dir = images_dir
+                    self.labels_dict = labels_dict
+                    self.image_paths = list(labels_dict.keys())
+                    self.transform = transform
+
+                def __len__(self):
+                    return len(self.image_paths)
+
+                def __getitem__(self, index):
+                    img_path = os.path.join(self.images_dir, self.image_paths[index])
+                    img = Image.open(img_path).convert(input_img_mode)
+
+                    labels = self.labels_dict[self.image_paths[index]]
+
+                    if self.transform:
+                        img = self.transform(img)
+
+                    return img, labels
+
+            ds = MultiLabelImageDataset(images_dir, labels_dict, **kwargs)
+
+        else:
+            ds = ImageFolder(root, **kwargs)
     return ds
